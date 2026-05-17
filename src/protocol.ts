@@ -227,9 +227,10 @@ export function createProtocolEventMapper(
   let threadId = context.threadId;
 
   return (event) => {
-    if (event.kind === 'codex_session') {
-      sessionId ??= event.codexSessionId;
-      threadId ??= event.codexSessionId;
+    const codexSessionId = codexSessionIdFromEvent(event);
+    if (codexSessionId) {
+      sessionId ??= codexSessionId;
+      threadId ??= codexSessionId;
     }
 
     seq += 1;
@@ -246,7 +247,12 @@ export function toAgentStreamEvent(
   event: CodexRunnerEvent,
   context: ProtocolEventMapperContext,
 ): AgentStreamEvent {
-  const base = baseEvent(context);
+  const codexSessionId = codexSessionIdFromEvent(event);
+  const base = baseEvent({
+    ...context,
+    sessionId: context.sessionId ?? codexSessionId,
+    threadId: context.threadId ?? codexSessionId,
+  });
 
   switch (event.kind) {
     case 'codex_session': {
@@ -403,6 +409,18 @@ export function toAgentStreamEvent(
         source: context.source ?? 'codex-runner',
         payload: event.raw,
       });
+  }
+}
+
+function codexSessionIdFromEvent(event: CodexRunnerEvent): string | undefined {
+  switch (event.kind) {
+    case 'codex_session':
+    case 'completed':
+    case 'failed':
+    case 'aborted':
+      return event.codexSessionId;
+    default:
+      return undefined;
   }
 }
 

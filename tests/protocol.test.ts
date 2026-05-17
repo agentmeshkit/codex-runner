@@ -195,4 +195,24 @@ describe('protocol event adapter', () => {
       reason: 'signal',
     });
   });
+
+  it('uses terminal event codexSessionId when no prior session context exists', () => {
+    const event = toAgentStreamEvent(
+      { kind: 'completed', codexSessionId: 'session-from-terminal' },
+      {
+        turnId: 'turn-1',
+        seq: 1,
+        now: () => 789,
+      },
+    );
+
+    expect(event).toEqual({
+      type: 'turn_completed',
+      at: 789,
+      seq: 1,
+      turnId: 'turn-1',
+      threadId: 'session-from-terminal',
+      sessionId: 'session-from-terminal',
+    });
+  });
 });

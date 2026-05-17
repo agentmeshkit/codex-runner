@@ -144,7 +144,7 @@ describe('createCodexRunner', () => {
       },
     });
 
-    await collect(
+    const events = await collect(
       runner.resumeTurn({
         codexSessionId: 's1',
         prompt: 'again',
@@ -159,6 +159,131 @@ describe('createCodexRunner', () => {
       '--json',
       '--skip-git-repo-check',
       'again',
+    ]);
+    expect(events).toEqual([
+      { kind: 'codex_session', codexSessionId: 's1' },
+      {
+        kind: 'usage',
+        usage: {
+          inputTokens: 0,
+          cachedInputTokens: 0,
+          outputTokens: 0,
+          reasoningOutputTokens: 0,
+        },
+      },
+      expect.objectContaining({
+        kind: 'completed',
+        codexSessionId: 's1',
+      }),
+    ]);
+  });
+
+  it('does not duplicate a resumed session id when Codex also emits thread.started', async () => {
+    const child = new FakeChild();
+    const runner = createCodexRunner({
+      spawn() {
+        setImmediate(() => {
+          child.stdout.write('{"type":"thread.started","thread_id":"s1"}\n');
+          child.stdout.write('{"type":"turn.completed","usage":{}}\n');
+          child.stdout.end();
+          child.stderr.end();
+          child.emit('exit', 0, null);
+        });
+        return child;
+      },
+    });
+
+    const events = await collect(
+      runner.resumeTurn({
+        codexSessionId: 's1',
+        prompt: 'again',
+        cwd: '/tmp/repo',
+      }),
+    );
+
+    expect(events.filter((event) => event.kind === 'codex_session')).toEqual([
+      { kind: 'codex_session', codexSessionId: 's1' },
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      kind: 'completed',
+      codexSessionId: 's1',
+    });
+  });
+
+  it('attaches first-turn session id to terminal events after thread.started', async () => {
+    const child = new FakeChild();
+    const runner = createCodexRunner({
+      spawn() {
+        setImmediate(() => {
+          child.stdout.write('{"type":"thread.started","thread_id":"first-session"}\n');
+          child.stdout.write('{"type":"turn.completed","usage":{}}\n');
+          child.stdout.end();
+          child.stderr.end();
+          child.emit('exit', 0, null);
+        });
+        return child;
+      },
+    });
+
+    const events = await collect(
+      runner.runTurn({ prompt: 'new', cwd: '/tmp/repo' }),
+    );
+
+    expect(events.at(-1)).toMatchObject({
+      kind: 'completed',
+      codexSessionId: 'first-session',
+    });
+  });
+
+  it('includes resume session id on spawn failures', async () => {
+    const runner = createCodexRunner({
+      spawn() {
+        throw new Error('ENOENT');
+      },
+    });
+
+    const events = await collect(
+      runner.resumeTurn({
+        codexSessionId: 'known-session',
+        prompt: 'again',
+        cwd: '/tmp/repo',
+      }),
+    );
+
+    expect(events).toEqual([
+      {
+        kind: 'failed',
+        code: 'spawn_error',
+        codexSessionId: 'known-session',
+        message: 'spawn error: ENOENT',
+      },
+    ]);
+  });
+
+  it('includes resume session id when aborted before spawn', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const runner = createCodexRunner({
+      spawn() {
+        throw new Error('should not spawn');
+      },
+    });
+
+    const events = await collect(
+      runner.resumeTurn({
+        codexSessionId: 'known-session',
+        prompt: 'again',
+        cwd: '/tmp/repo',
+        signal: controller.signal,
+      }),
+    );
+
+    expect(events).toEqual([
+      {
+        kind: 'aborted',
+        reason: 'signal',
+        codexSessionId: 'known-session',
+      },
     ]);
   });
 

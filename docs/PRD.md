@@ -32,6 +32,8 @@ the same behavior.
 - Detect installed Codex CLI capabilities before a turn when callers want setup
   diagnostics.
 - Isolate caller `onEvent` callback failures from the runner lifecycle.
+- Return or preserve the Codex session id reliably for continuous conversation
+  flows.
 - Keep authentication external through `codexHome`.
 
 ## Non-Goals
@@ -57,6 +59,9 @@ the same behavior.
 - `detectCodexCliCapabilities()` for conservative `codex --version` and
   `codex exec --help` probing.
 - Stable optional `failed.code` values for runner and parser failure modes.
+- `codexSessionId` on terminal events when known; `resumeTurn()` emits a
+  synthetic `codex_session` event from the requested resume id before waiting
+  for CLI stdout.
 
 ## Public API Sketch
 
@@ -94,6 +99,12 @@ Implemented command shape:
 The resume path still sets the spawned child process `cwd`, but does not pass
 `-C` or `--sandbox` because current Codex resume inherits those from session
 metadata.
+
+For continuous sessions, callers should persist the value from `codex_session`.
+Terminal events (`completed`, `failed`, and `aborted`) also include
+`codexSessionId` when available. On `resumeTurn()`, the runner already knows the
+session id supplied by the caller, so it emits `codex_session` even if the CLI
+does not repeat `thread.started`.
 
 Implemented default runner events use a `kind` discriminator:
 
@@ -138,6 +149,9 @@ direct type imports without changing the default `CodexRunnerEvent` stream.
   failure, event queue overflow failure, and newly normalized Codex item types.
 - Unit tests cover capability detection, callback failure isolation, and stable
   failure codes.
+- Unit tests cover resume session id emission, duplicate session id suppression,
+  terminal event session id fallback, and compatible `thread.started` id field
+  names.
 - Fixture tests replay real Codex JSONL without spawning Codex.
 - No secrets are logged.
 - The package can be used without AgentWeb.

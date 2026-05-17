@@ -65,7 +65,13 @@ export class CodexJsonlParser {
   }
 
   private threadStarted(event: RawRecord): CodexRunnerEvent[] {
-    const codexSessionId = stringValue(event.thread_id) ?? stringValue(event.threadId);
+    const codexSessionId =
+      stringValue(event.thread_id) ??
+      stringValue(event.threadId) ??
+      stringValue(event.session_id) ??
+      stringValue(event.sessionId) ??
+      stringValue(event.id) ??
+      stringValue(asRecord(event.thread).id);
     if (!codexSessionId) {
       return [this.remember({ kind: 'unknown', raw: redactValue(event) })];
     }

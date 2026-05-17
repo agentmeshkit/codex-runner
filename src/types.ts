@@ -97,11 +97,17 @@ export type CodexRunnerEvent =
       raw?: unknown;
     }
   | { kind: 'usage'; usage: CodexRunnerUsage }
-  | { kind: 'completed'; usage?: CodexRunnerUsage; lastEvent?: CodexRunnerEvent }
+  | {
+      kind: 'completed';
+      codexSessionId?: string;
+      usage?: CodexRunnerUsage;
+      lastEvent?: CodexRunnerEvent;
+    }
   | {
       kind: 'failed';
       message: string;
       code?: CodexRunnerErrorCode;
+      codexSessionId?: string;
       exitCode?: number | null;
       stderr?: string;
       lastEvent?: CodexRunnerEvent;
@@ -109,6 +115,7 @@ export type CodexRunnerEvent =
   | {
       kind: 'aborted';
       reason: 'signal' | 'timeout';
+      codexSessionId?: string;
       exitCode?: number | null;
       stderr?: string;
       lastEvent?: CodexRunnerEvent;

@@ -36,6 +36,9 @@ for await (const event of runner.runTurn({
   if (event.kind === 'codex_session') {
     console.log('resume with', event.codexSessionId);
   }
+  if (event.kind === 'completed' && event.codexSessionId) {
+    console.log('last known session', event.codexSessionId);
+  }
 }
 ```
 
@@ -54,6 +57,9 @@ for await (const event of runner.resumeTurn({
 
 Resume uses `codex exec resume <codex_session_id> --json ...` and sets the
 Node child process `cwd`; Codex session metadata owns the original sandbox.
+Because resumed sessions already have a known id, `resumeTurn()` emits
+`codex_session` immediately even if the Codex CLI does not repeat
+`thread.started` on stdout.
 
 ## CLI Capability Detection
 
@@ -86,6 +92,12 @@ callers:
 - `tool_call`, `tool_result`
 - `exec_started`, `exec_finished`
 - `usage`, `completed`, `failed`, `aborted`, `unknown`
+
+For continuous sessions, use `codex_session` as the primary source of the
+resume id. Terminal events (`completed`, `failed`, and `aborted`) also include
+`codexSessionId` when the runner knows it, so callers can persist the id even if
+they only inspect the final event. On resume, that id is available even when
+process spawn fails or the turn is aborted before Codex writes JSONL.
 
 `failed` events include `message` and may include a stable `code` such as
 `spawn_error`, `stdout_read_error`, `line_too_large`, `queue_overflow`,

@@ -101,6 +101,36 @@ describe('parseCodexJsonl', () => {
     expect(JSON.stringify(events)).toContain('[REDACTED]');
   });
 
+  it('extracts session ids from compatible thread.started field names', () => {
+    expect(
+      parseCodexJsonl(
+        JSON.stringify({
+          type: 'thread.started',
+          session_id: 'session-from-snake-case',
+        }),
+      ),
+    ).toEqual([
+      {
+        kind: 'codex_session',
+        codexSessionId: 'session-from-snake-case',
+      },
+    ]);
+
+    expect(
+      parseCodexJsonl(
+        JSON.stringify({
+          type: 'thread.started',
+          thread: { id: 'session-from-nested-thread' },
+        }),
+      ),
+    ).toEqual([
+      {
+        kind: 'codex_session',
+        codexSessionId: 'session-from-nested-thread',
+      },
+    ]);
+  });
+
   it('adds stable error codes for parser-originated failures', () => {
     expect(parseCodexJsonl('{bad json')[0]).toMatchObject({
       kind: 'failed',

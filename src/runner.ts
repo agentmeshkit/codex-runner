@@ -97,7 +97,11 @@ async function* runCodexExec(
 ): AsyncIterable<CodexRunnerEvent> {
   const { request } = options;
   if (request.signal?.aborted) {
-    yield emitBeforeChild(request, { kind: 'aborted', reason: 'signal' });
+    yield emitBeforeChild(request, {
+      kind: 'aborted',
+      reason: 'signal',
+      codexSessionId: options.codexSessionId,
+    });
     return;
   }
 
@@ -115,6 +119,7 @@ async function* runCodexExec(
     yield emitBeforeChild(request, {
       kind: 'failed',
       code: 'spawn_error',
+      codexSessionId: options.codexSessionId,
       message: `spawn error: ${redactString(errorMessage(error))}`,
     });
     return;
@@ -126,6 +131,8 @@ async function* runCodexExec(
   let completedOrFailedInStream = false;
   let childExited = false;
   let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+  let knownCodexSessionId = options.codexSessionId;
+  let emittedCodexSessionId: string | undefined;
 
   const terminateChild = (signal: NodeJS.Signals = 'SIGTERM') => {
     try {
@@ -161,6 +168,7 @@ async function* runCodexExec(
   ): Extract<CodexRunnerEvent, { kind: 'failed' }> => ({
     kind: 'failed',
     code,
+    codexSessionId: knownCodexSessionId,
     message,
     stderr: stderr ? redactString(stderr) : undefined,
     lastEvent: parser.lastEvent,
@@ -169,7 +177,8 @@ async function* runCodexExec(
 
   const failAndTerminate = (code: CodexRunnerErrorCode, message: string) => {
     completedOrFailedInStream = true;
-    eventQueue.fail(emitSafe(failedEvent(code, message)));
+    const emitted = emitSafe(failedEvent(code, message));
+    if (emitted) eventQueue.fail(emitted);
     terminateChild('SIGTERM');
   };
 
@@ -178,23 +187,70 @@ async function* runCodexExec(
     callbackFailed = true;
     completedOrFailedInStream = true;
     eventQueue.fail(
-      failedEvent(
-        'callback_error',
-        `onEvent callback error: ${redactString(errorMessage(error))}`,
+      enrichWithSession(
+        failedEvent(
+          'callback_error',
+          `onEvent callback error: ${redactString(errorMessage(error))}`,
+        ),
       ),
     );
     terminateChild('SIGTERM');
   };
 
-  const emitSafe = (event: CodexRunnerEvent): CodexRunnerEvent => {
-    if (callbackFailed) return event;
+  const emitSafe = (event: CodexRunnerEvent): CodexRunnerEvent | undefined => {
+    if (callbackFailed) return undefined;
     try {
       request.onEvent?.(event);
+      if (event.kind === 'codex_session') emittedCodexSessionId = event.codexSessionId;
+      return event;
     } catch (error) {
       failForCallbackError(error);
+      return undefined;
     }
-    return event;
   };
+
+  const pushRunnerEvent = (event: CodexRunnerEvent): boolean => {
+    const prepared = prepareEvent(event);
+    if (!prepared) return true;
+    const emitted = emitSafe(prepared);
+    if (!emitted) return false;
+    const pushed = eventQueue.push(emitted);
+    if (!pushed) {
+      failAndTerminate(
+        'queue_overflow',
+        `Codex event queue exceeded maxBufferedEvents=${options.maxBufferedEvents}`,
+      );
+      return false;
+    }
+    return true;
+  };
+
+  const prepareEvent = (event: CodexRunnerEvent): CodexRunnerEvent | undefined => {
+    if (event.kind === 'codex_session') {
+      knownCodexSessionId = event.codexSessionId;
+      if (emittedCodexSessionId === event.codexSessionId) return undefined;
+      return event;
+    }
+    return enrichWithSession(event);
+  };
+
+  const enrichWithSession = (event: CodexRunnerEvent): CodexRunnerEvent => {
+    if (!knownCodexSessionId) return event;
+    switch (event.kind) {
+      case 'completed':
+        return { ...event, codexSessionId: event.codexSessionId ?? knownCodexSessionId };
+      case 'failed':
+        return { ...event, codexSessionId: event.codexSessionId ?? knownCodexSessionId };
+      case 'aborted':
+        return { ...event, codexSessionId: event.codexSessionId ?? knownCodexSessionId };
+      default:
+        return event;
+    }
+  };
+
+  if (options.codexSessionId) {
+    pushRunnerEvent({ kind: 'codex_session', codexSessionId: options.codexSessionId });
+  }
 
   const stdoutPump = pumpStream(
     child.stdout,
@@ -203,15 +259,7 @@ async function* runCodexExec(
         if (event.kind === 'completed' || event.kind === 'failed') {
           completedOrFailedInStream = true;
         }
-        const pushed = eventQueue.push(emitSafe(event));
-        if (callbackFailed) break;
-        if (!pushed) {
-          failAndTerminate(
-            'queue_overflow',
-            `Codex event queue exceeded maxBufferedEvents=${options.maxBufferedEvents}`,
-          );
-          break;
-        }
+        if (!pushRunnerEvent(event)) break;
       }
     },
     { maxLineBytes: options.maxStdoutLineBytes, streamName: 'Codex stdout JSONL' },
@@ -255,13 +303,8 @@ async function* runCodexExec(
     if (eventQueue.closed) return;
 
     if (result.type === 'error') {
-      eventQueue.push(
-        emitSafe(
-          failedEvent(
-            'spawn_error',
-            `spawn error: ${redactString(result.error.message)}`,
-          ),
-        ),
+      pushRunnerEvent(
+        failedEvent('spawn_error', `spawn error: ${redactString(result.error.message)}`),
       );
       eventQueue.close();
       return;
@@ -270,33 +313,29 @@ async function* runCodexExec(
     await Promise.allSettled([stdoutPump, stderrPump]);
 
     if (abortedReason) {
-      eventQueue.push(
-        emitSafe({
+      pushRunnerEvent({
           kind: 'aborted',
           reason: abortedReason,
           exitCode: result.code,
           stderr: stderr ? redactString(stderr) : undefined,
           lastEvent: parser.lastEvent,
+      });
+      eventQueue.close();
+      return;
+    }
+
+    if (result.code !== 0 && result.code !== null) {
+      pushRunnerEvent(
+        failedEvent('codex_exit', `codex exit ${result.code}`, {
+          exitCode: result.code,
         }),
       );
       eventQueue.close();
       return;
     }
 
-    if (result.code !== 0 && result.code !== null) {
-      eventQueue.push(
-        emitSafe(
-          failedEvent('codex_exit', `codex exit ${result.code}`, {
-            exitCode: result.code,
-          }),
-        ),
-      );
-      eventQueue.close();
-      return;
-    }
-
     if (!completedOrFailedInStream) {
-      eventQueue.push(emitSafe({ kind: 'completed', lastEvent: parser.lastEvent }));
+      pushRunnerEvent({ kind: 'completed', lastEvent: parser.lastEvent });
     }
     eventQueue.close();
   });
@@ -390,9 +429,21 @@ function emitBeforeChild(
     return {
       kind: 'failed',
       code: 'callback_error',
+      codexSessionId: terminalCodexSessionId(event),
       message: `onEvent callback error: ${redactString(errorMessage(error))}`,
       lastEvent: event,
     };
+  }
+}
+
+function terminalCodexSessionId(event: CodexRunnerEvent): string | undefined {
+  switch (event.kind) {
+    case 'completed':
+    case 'failed':
+    case 'aborted':
+      return event.codexSessionId;
+    default:
+      return undefined;
   }
 }
 
