@@ -33,6 +33,7 @@ describe('parseCodexJsonl', () => {
       kind: 'reasoning',
       itemId: 'reason-1',
       text: 'Need inspect repo',
+      delta: 'Need inspect repo',
       final: true,
     });
     expect(events).toContainEqual(
@@ -151,7 +152,40 @@ describe('parseCodexJsonl', () => {
     });
   });
 
-  it('maps file changes, web search, todo lists, and approval requests', () => {
+  it('redacts object-shaped error messages', () => {
+    const events = parseCodexJsonl(
+      JSON.stringify({
+        type: 'turn.failed',
+        error: { message: 'Bearer abc.def.ghi' },
+      }),
+    );
+
+    expect(events).toEqual([
+      {
+        kind: 'failed',
+        code: 'turn_failed',
+        message: '[REDACTED]',
+      },
+    ]);
+  });
+
+  it('does not emit zero usage when turn.completed omits usage', () => {
+    const events = parseCodexJsonl(
+      JSON.stringify({
+        type: 'turn.completed',
+      }),
+    );
+
+    expect(events).toEqual([
+      {
+        kind: 'completed',
+        usage: undefined,
+        lastEvent: undefined,
+      },
+    ]);
+  });
+
+  it('maps file changes, web search, todo lists, plan updates, and approval requests', () => {
     const events = parseCodexJsonl(
       [
         JSON.stringify({
@@ -179,6 +213,14 @@ describe('parseCodexJsonl', () => {
             id: 'todo-1',
             type: 'todo_list',
             todos: [{ text: 'write tests', status: 'completed' }],
+          },
+        }),
+        JSON.stringify({
+          type: 'item.updated',
+          item: {
+            id: 'plan-1',
+            type: 'plan_update',
+            steps: [{ step: 'write tests', status: 'in_progress' }],
           },
         }),
         JSON.stringify({
@@ -221,6 +263,14 @@ describe('parseCodexJsonl', () => {
       final: true,
     });
     expect(events).toContainEqual({
+      kind: 'plan_update',
+      itemId: 'plan-1',
+      steps: [{ step: 'write tests', status: 'in_progress' }],
+      status: undefined,
+      raw: expect.objectContaining({ type: 'plan_update' }),
+      final: false,
+    });
+    expect(events).toContainEqual({
       kind: 'approval_request',
       approvalId: 'approval-1',
       approvalType: 'exec',
@@ -229,5 +279,89 @@ describe('parseCodexJsonl', () => {
       status: undefined,
       raw: expect.objectContaining({ type: 'exec_approval_request' }),
     });
+  });
+
+  it('uses synthetic ids so id-less items do not overwrite each other', () => {
+    const events = parseCodexJsonl(
+      [
+        JSON.stringify({
+          type: 'item.started',
+          item: { type: 'tool_call', name: 'first', arguments: { a: 1 } },
+        }),
+        JSON.stringify({
+          type: 'item.started',
+          item: { type: 'tool_call', name: 'second', arguments: { b: 2 } },
+        }),
+        JSON.stringify({
+          type: 'item.started',
+          item: { type: 'command_execution', command: 'pwd', status: 'in_progress' },
+        }),
+        JSON.stringify({
+          type: 'item.started',
+          item: { type: 'command_execution', command: 'ls', status: 'in_progress' },
+        }),
+      ].join('\n'),
+    );
+
+    const toolIds = events
+      .filter((event) => event.kind === 'tool_call')
+      .map((event) => event.toolCallId);
+    const execIds = events
+      .filter((event) => event.kind === 'exec_started')
+      .map((event) => event.execId);
+
+    expect(new Set(toolIds).size).toBe(2);
+    expect(new Set(execIds).size).toBe(2);
+    expect([...toolIds, ...execIds]).not.toContain('unknown');
+  });
+
+  it('emits tool call updates and deduplicates identical tool results', () => {
+    const events = parseCodexJsonl(
+      [
+        JSON.stringify({
+          type: 'item.started',
+          item: {
+            id: 'tool-1',
+            type: 'tool_call',
+            name: 'lookup',
+            arguments: { query: 'one' },
+            status: 'in_progress',
+          },
+        }),
+        JSON.stringify({
+          type: 'item.updated',
+          item: {
+            id: 'tool-1',
+            type: 'tool_call',
+            name: 'lookup',
+            arguments: { query: 'two' },
+            status: 'in_progress',
+          },
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'tool-1',
+            type: 'tool_call',
+            name: 'lookup',
+            arguments: { query: 'two' },
+            output: { ok: true },
+          },
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'tool-1',
+            type: 'tool_call',
+            name: 'lookup',
+            arguments: { query: 'two' },
+            output: { ok: true },
+          },
+        }),
+      ].join('\n'),
+    );
+
+    expect(events.filter((event) => event.kind === 'tool_call')).toHaveLength(3);
+    expect(events.filter((event) => event.kind === 'tool_result')).toHaveLength(1);
   });
 });

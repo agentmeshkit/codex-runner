@@ -17,16 +17,24 @@ export type CodexRunnerErrorCode =
   | 'line_too_large'
   | 'queue_overflow'
   | 'codex_exit'
+  | 'resume_session_mismatch'
   | 'turn_failed'
   | 'stream_error'
   | 'callback_error';
+
+export type CodexApprovalMode =
+  | 'untrusted'
+  | 'on-failure'
+  | 'on-request'
+  | 'never'
+  | (string & {});
 
 export type CodexRunnerEvent =
   | { kind: 'turn_started' }
   | { kind: 'codex_session'; codexSessionId: string }
   | { kind: 'text_delta'; itemId: string; text: string }
   | { kind: 'agent_message'; itemId: string; text: string; final: boolean }
-  | { kind: 'reasoning'; itemId: string; text: string; final: boolean }
+  | { kind: 'reasoning'; itemId: string; text: string; delta?: string; final: boolean }
   | {
       kind: 'file_change';
       itemId: string;
@@ -50,6 +58,14 @@ export type CodexRunnerEvent =
       kind: 'todo_list';
       itemId: string;
       todos?: unknown;
+      status?: string;
+      raw?: unknown;
+      final: boolean;
+    }
+  | {
+      kind: 'plan_update';
+      itemId: string;
+      steps?: unknown;
       status?: string;
       raw?: unknown;
       final: boolean;
@@ -109,6 +125,7 @@ export type CodexRunnerEvent =
       code?: CodexRunnerErrorCode;
       codexSessionId?: string;
       exitCode?: number | null;
+      exitSignal?: string | null;
       stderr?: string;
       lastEvent?: CodexRunnerEvent;
     }
@@ -116,7 +133,9 @@ export type CodexRunnerEvent =
       kind: 'aborted';
       reason: 'signal' | 'timeout';
       codexSessionId?: string;
+      timeoutMs?: number;
       exitCode?: number | null;
+      exitSignal?: string | null;
       stderr?: string;
       lastEvent?: CodexRunnerEvent;
     }
@@ -139,6 +158,19 @@ export type CodexTurnRequest = {
   codexHome?: string;
   model?: string;
   sandbox?: CodexSandboxMode;
+  approvalMode?: CodexApprovalMode;
+  skipGitRepoCheck?: boolean;
+  ephemeral?: boolean;
+  ignoreUserConfig?: boolean;
+  ignoreRules?: boolean;
+  profile?: string;
+  config?: string[];
+  images?: string[];
+  addDirs?: string[];
+  outputLastMessagePath?: string;
+  outputSchemaPath?: string;
+  dangerouslyBypassApprovalsAndSandbox?: boolean;
+  extraArgs?: string[];
   timeoutMs?: number;
   signal?: AbortSignal;
   env?: CodexRunnerEnvironment;

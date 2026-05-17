@@ -17,7 +17,6 @@ import type {
 } from './types.js';
 
 const DEFAULT_CODEX_BIN = 'codex';
-const DEFAULT_SANDBOX = 'workspace-write';
 const STDERR_TAIL_LIMIT = 4000;
 const DEFAULT_MAX_STDOUT_LINE_BYTES = 1024 * 1024;
 const DEFAULT_MAX_BUFFERED_EVENTS = 1024;
@@ -63,22 +62,32 @@ export function buildCodexExecArgs(
   request: CodexTurnRequest,
   codexSessionId?: string,
 ): string[] {
-  const common = ['--json', '--skip-git-repo-check'];
-  if (request.model) common.push('-m', request.model);
+  const args: string[] = [];
+  if (request.approvalMode) args.push('--ask-for-approval', request.approvalMode);
 
-  if (codexSessionId) {
-    return ['exec', 'resume', codexSessionId, ...common, request.prompt];
+  args.push('exec', '--json', '--color', 'never');
+  if (request.model) args.push('-m', request.model);
+  if (request.cwd) args.push('-C', request.cwd);
+  if (request.sandbox) args.push('--sandbox', request.sandbox);
+  if (request.skipGitRepoCheck) args.push('--skip-git-repo-check');
+  if (request.ephemeral) args.push('--ephemeral');
+  if (request.ignoreUserConfig) args.push('--ignore-user-config');
+  if (request.ignoreRules) args.push('--ignore-rules');
+  if (request.profile) args.push('-p', request.profile);
+  for (const config of request.config ?? []) args.push('-c', config);
+  for (const image of request.images ?? []) args.push('-i', image);
+  for (const addDir of request.addDirs ?? []) args.push('--add-dir', addDir);
+  if (request.outputLastMessagePath) args.push('-o', request.outputLastMessagePath);
+  if (request.outputSchemaPath) args.push('--output-schema', request.outputSchemaPath);
+  if (request.dangerouslyBypassApprovalsAndSandbox) {
+    args.push('--dangerously-bypass-approvals-and-sandbox');
   }
-
-  return [
-    'exec',
-    ...common,
-    '--sandbox',
-    request.sandbox ?? DEFAULT_SANDBOX,
-    '-C',
-    request.cwd,
-    request.prompt,
-  ];
+  args.push(...(request.extraArgs ?? []));
+  if (codexSessionId) {
+    args.push('resume', codexSessionId);
+  }
+  args.push(request.prompt);
+  return args;
 }
 
 type RunCodexExecOptions = {
@@ -211,8 +220,9 @@ async function* runCodexExec(
   };
 
   const pushRunnerEvent = (event: CodexRunnerEvent): boolean => {
+    if (eventQueue.closed) return false;
     const prepared = prepareEvent(event);
-    if (!prepared) return true;
+    if (!prepared) return !eventQueue.closed;
     const emitted = emitSafe(prepared);
     if (!emitted) return false;
     const pushed = eventQueue.push(emitted);
@@ -228,6 +238,16 @@ async function* runCodexExec(
 
   const prepareEvent = (event: CodexRunnerEvent): CodexRunnerEvent | undefined => {
     if (event.kind === 'codex_session') {
+      if (
+        options.codexSessionId &&
+        event.codexSessionId !== options.codexSessionId
+      ) {
+        failAndTerminate(
+          'resume_session_mismatch',
+          `expected Codex session ${options.codexSessionId}, got ${event.codexSessionId}`,
+        );
+        return undefined;
+      }
       knownCodexSessionId = event.codexSessionId;
       if (emittedCodexSessionId === event.codexSessionId) return undefined;
       return event;
@@ -272,12 +292,11 @@ async function* runCodexExec(
     );
   });
 
-  const stderrPump = pumpStream(
+  const stderrPump = pumpStderr(
     child.stderr,
     (chunk) => {
       stderr = tail(`${stderr}${chunk}`, STDERR_TAIL_LIMIT);
     },
-    { maxLineBytes: STDERR_TAIL_LIMIT * 4, streamName: 'Codex stderr' },
   ).catch((error) => {
     stderr = tail(
       `${stderr}\nstderr read error: ${errorMessage(error)}`,
@@ -323,7 +342,9 @@ async function* runCodexExec(
       pushRunnerEvent({
         kind: 'aborted',
         reason: abortedReason,
+        timeoutMs: abortedReason === 'timeout' ? request.timeoutMs : undefined,
         exitCode: result.code,
+        exitSignal: result.signal,
         stderr: stderr ? redactString(stderr) : undefined,
         lastEvent: parser.lastEvent,
       });
@@ -335,6 +356,18 @@ async function* runCodexExec(
       pushRunnerEvent(
         failedEvent('codex_exit', `codex exit ${result.code}`, {
           exitCode: result.code,
+          exitSignal: result.signal,
+        }),
+      );
+      eventQueue.close();
+      return;
+    }
+
+    if (result.signal) {
+      pushRunnerEvent(
+        failedEvent('codex_exit', `codex exited with signal ${result.signal}`, {
+          exitCode: result.code,
+          exitSignal: result.signal,
         }),
       );
       eventQueue.close();
@@ -408,6 +441,20 @@ async function pumpStream(
     assertLineWithinLimit(buffer, options);
   }
   if (buffer.trim()) onLine(buffer);
+}
+
+async function pumpStderr(
+  stream: NodeJS.ReadableStream | null | undefined,
+  onChunk: (chunk: string) => void,
+): Promise<void> {
+  if (!stream) return;
+  const decoder = new StringDecoder('utf8');
+  for await (const chunk of stream as Readable) {
+    const text = Buffer.isBuffer(chunk) ? decoder.write(chunk) : String(chunk);
+    if (text) onChunk(text);
+  }
+  const tail = decoder.end();
+  if (tail) onChunk(tail);
 }
 
 function assertLineWithinLimit(

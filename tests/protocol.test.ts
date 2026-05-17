@@ -19,10 +19,11 @@ describe('protocol event adapter', () => {
       { kind: 'text_delta', itemId: 'msg-1', text: 'hel' },
       { kind: 'agent_message', itemId: 'msg-1', text: 'hello', final: false },
       { kind: 'agent_message', itemId: 'msg-1', text: 'hello', final: true },
-      { kind: 'reasoning', itemId: 'reason-1', text: 'thinking', final: true },
+      { kind: 'reasoning', itemId: 'reason-1', text: 'thinking', delta: 'thinking', final: true },
       { kind: 'file_change', itemId: 'file-1', path: 'src/app.ts', status: 'modified', final: true },
       { kind: 'web_search', itemId: 'search-1', query: 'codex sdk', status: 'completed', final: true },
       { kind: 'todo_list', itemId: 'todo-1', todos: [{ text: 'test', status: 'completed' }], final: true },
+      { kind: 'plan_update', itemId: 'plan-1', steps: [{ step: 'test', status: 'completed' }], final: true },
       { kind: 'approval_request', approvalId: 'approval-1', approvalType: 'exec', command: 'pnpm test' },
       { kind: 'tool_call', toolCallId: 'tool-1', name: 'github.get_issue', arguments: { number: 1 } },
       { kind: 'tool_result', toolCallId: 'tool-1', ok: true, result: { title: 'bug' } },
@@ -63,6 +64,7 @@ describe('protocol event adapter', () => {
       'file_change',
       'web_search',
       'todo_list',
+      'plan_update',
       'approval_request',
       'tool_call',
       'tool_result',
@@ -118,24 +120,30 @@ describe('protocol event adapter', () => {
       partial: false,
     });
     expect(protocolEvents[9]).toMatchObject({
+      type: 'plan_update',
+      itemId: 'plan-1',
+      steps: [{ step: 'test', status: 'completed' }],
+      partial: false,
+    });
+    expect(protocolEvents[10]).toMatchObject({
       type: 'approval_request',
       approvalId: 'approval-1',
       approvalType: 'exec',
       command: 'pnpm test',
     });
-    expect(protocolEvents[12]).toMatchObject({
+    expect(protocolEvents[13]).toMatchObject({
       type: 'exec_begin',
       callId: 'exec-1',
       command: 'pnpm test',
       cwd: '/repo',
     });
-    expect(protocolEvents[13]).toMatchObject({
+    expect(protocolEvents[14]).toMatchObject({
       type: 'exec_end',
       callId: 'exec-1',
       exitCode: 0,
       stdout: 'ok',
     });
-    expect(protocolEvents[14]).toMatchObject({
+    expect(protocolEvents[15]).toMatchObject({
       type: 'usage',
       usage: {
         inputTokens: 10,
@@ -145,7 +153,7 @@ describe('protocol event adapter', () => {
         totalTokens: 15,
       },
     });
-    expect(protocolEvents[15]).toMatchObject({
+    expect(protocolEvents[16]).toMatchObject({
       type: 'turn_completed',
       usage: {
         inputTokens: 10,
@@ -155,7 +163,7 @@ describe('protocol event adapter', () => {
         totalTokens: 15,
       },
     });
-    expect(protocolEvents[16]).toMatchObject({
+    expect(protocolEvents[17]).toMatchObject({
       type: 'turn_failed',
       error: {
         code: 'codex_exit',
@@ -166,7 +174,7 @@ describe('protocol event adapter', () => {
         },
       },
     });
-    expect(protocolEvents[18]).toMatchObject({
+    expect(protocolEvents[19]).toMatchObject({
       type: 'raw',
       source: 'codex-runner',
       payload: { type: 'future.event' },

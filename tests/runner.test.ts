@@ -34,7 +34,16 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 }
 
 describe('buildCodexExecArgs', () => {
-  it('builds first-turn codex exec argv with cwd, model, and sandbox', () => {
+  it('builds first-turn codex exec argv with conservative defaults', () => {
+    expect(
+      buildCodexExecArgs({
+        prompt: 'inspect',
+        cwd: '/repo',
+      }),
+    ).toEqual(['exec', '--json', '--color', 'never', '-C', '/repo', 'inspect']);
+  });
+
+  it('builds first-turn codex exec argv with explicit cwd, model, and sandbox', () => {
     expect(
       buildCodexExecArgs({
         prompt: 'inspect',
@@ -45,34 +54,98 @@ describe('buildCodexExecArgs', () => {
     ).toEqual([
       'exec',
       '--json',
-      '--skip-git-repo-check',
+      '--color',
+      'never',
       '-m',
       'gpt-5.4',
-      '--sandbox',
-      'read-only',
       '-C',
       '/repo',
+      '--sandbox',
+      'read-only',
       'inspect',
     ]);
   });
 
-  it('builds resume argv without -C or --sandbox', () => {
+  it('builds resume argv with the same explicit exec options', () => {
     expect(
       buildCodexExecArgs(
         {
           prompt: 'continue',
           cwd: '/repo',
           sandbox: 'danger-full-access',
+          skipGitRepoCheck: true,
         },
         'session-1',
       ),
     ).toEqual([
       'exec',
+      '--json',
+      '--color',
+      'never',
+      '-C',
+      '/repo',
+      '--sandbox',
+      'danger-full-access',
+      '--skip-git-repo-check',
       'resume',
       'session-1',
-      '--json',
-      '--skip-git-repo-check',
       'continue',
+    ]);
+  });
+
+  it('builds argv with explicit high-permission and automation options', () => {
+    expect(
+      buildCodexExecArgs({
+        prompt: 'ship it',
+        cwd: '/repo',
+        approvalMode: 'never',
+        sandbox: 'danger-full-access',
+        dangerouslyBypassApprovalsAndSandbox: true,
+        ephemeral: true,
+        ignoreUserConfig: true,
+        ignoreRules: true,
+        profile: 'ci',
+        config: ['model="gpt-5.4"', 'shell_environment_policy.inherit=all'],
+        images: ['/tmp/a.png', '/tmp/b.png'],
+        addDirs: ['/tmp/work'],
+        outputLastMessagePath: '/tmp/last.txt',
+        outputSchemaPath: '/tmp/schema.json',
+        extraArgs: ['--enable', 'experimental_feature'],
+      }),
+    ).toEqual([
+      '--ask-for-approval',
+      'never',
+      'exec',
+      '--json',
+      '--color',
+      'never',
+      '-C',
+      '/repo',
+      '--sandbox',
+      'danger-full-access',
+      '--ephemeral',
+      '--ignore-user-config',
+      '--ignore-rules',
+      '-p',
+      'ci',
+      '-c',
+      'model="gpt-5.4"',
+      '-c',
+      'shell_environment_policy.inherit=all',
+      '-i',
+      '/tmp/a.png',
+      '-i',
+      '/tmp/b.png',
+      '--add-dir',
+      '/tmp/work',
+      '-o',
+      '/tmp/last.txt',
+      '--output-schema',
+      '/tmp/schema.json',
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--enable',
+      'experimental_feature',
+      'ship it',
     ]);
   });
 });
@@ -154,10 +227,13 @@ describe('createCodexRunner', () => {
 
     expect(invocation?.args).toEqual([
       'exec',
+      '--json',
+      '--color',
+      'never',
+      '-C',
+      '/tmp/repo',
       'resume',
       's1',
-      '--json',
-      '--skip-git-repo-check',
       'again',
     ]);
     expect(events).toEqual([
@@ -208,6 +284,37 @@ describe('createCodexRunner', () => {
       kind: 'completed',
       codexSessionId: 's1',
     });
+  });
+
+  it('fails and terminates when resume returns a different session id', async () => {
+    const child = new FakeChild();
+    const runner = createCodexRunner({
+      spawn() {
+        setImmediate(() => {
+          child.stdout.write('{"type":"thread.started","thread_id":"s2"}\n');
+        });
+        return child;
+      },
+    });
+
+    const events = await collect(
+      runner.resumeTurn({
+        codexSessionId: 's1',
+        prompt: 'again',
+        cwd: '/tmp/repo',
+      }),
+    );
+
+    expect(child.killed).toBe(true);
+    expect(events).toEqual([
+      { kind: 'codex_session', codexSessionId: 's1' },
+      expect.objectContaining({
+        kind: 'failed',
+        code: 'resume_session_mismatch',
+        codexSessionId: 's1',
+        message: 'expected Codex session s1, got s2',
+      }),
+    ]);
   });
 
   it('attaches first-turn session id to terminal events after thread.started', async () => {
@@ -433,7 +540,12 @@ describe('createCodexRunner', () => {
     );
 
     expect(child.killed).toBe(true);
-    expect(events.at(-1)).toMatchObject({ kind: 'aborted', reason: 'timeout' });
+    expect(events.at(-1)).toMatchObject({
+      kind: 'aborted',
+      reason: 'timeout',
+      timeoutMs: 1,
+      exitSignal: 'SIGTERM',
+    });
   });
 
   it('kills the child when the consumer stops iterating early', async () => {
@@ -508,5 +620,34 @@ describe('createCodexRunner', () => {
       code: 'queue_overflow',
       message: 'Codex event queue exceeded maxBufferedEvents=0',
     });
+  });
+
+  it('keeps a redacted chunk-based stderr tail without requiring newlines', async () => {
+    const child = new FakeChild();
+    const runner = createCodexRunner({
+      spawn() {
+        setImmediate(() => {
+          child.stderr.write('x'.repeat(5000));
+          child.stderr.write(' Bearer secret-token-without-newline');
+          child.stdout.end();
+          child.stderr.end();
+          child.emit('exit', 2, null);
+        });
+        return child;
+      },
+    });
+
+    const events = await collect(
+      runner.runTurn({ prompt: 'fail', cwd: '/tmp/repo' }),
+    );
+
+    const failed = events.at(-1);
+    expect(failed).toMatchObject({
+      kind: 'failed',
+      code: 'codex_exit',
+    });
+    expect(failed && 'stderr' in failed ? failed.stderr : '').toContain('[REDACTED]');
+    expect(failed && 'stderr' in failed ? failed.stderr?.length : 0).toBeLessThanOrEqual(4000);
+    expect(JSON.stringify(events)).not.toContain('secret-token-without-newline');
   });
 });

@@ -18,6 +18,7 @@ export type {
   ExecEndEvent,
   ApprovalRequestEvent,
   FileChangeEvent,
+  PlanUpdateEvent,
   ProtocolEventMapper,
   ProtocolEventMapperContext,
   RawEvent,
@@ -42,6 +43,7 @@ export type {
   DetectCodexCliCapabilitiesOptions,
 } from './capabilities.js';
 export type {
+  CodexApprovalMode,
   CodexChildProcess,
   CodexExecInvocation,
   CodexResumeTurnRequest,

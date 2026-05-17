@@ -57,8 +57,8 @@ the same behavior.
 - `timeoutMs`, `AbortSignal`, and extra environment support.
 - Secret redaction for emitted raw events, stderr tails, and error messages.
 - `maxStdoutLineBytes`, `maxBufferedEvents`, and `killGraceMs` runner options.
-- Explicit parser support for `file_change`, `web_search`, `todo_list`, and
-  approval request items.
+- Explicit parser support for `file_change`, `web_search`, `todo_list`,
+  `plan_update`, and approval request items.
 - `detectCodexCliCapabilities()` for conservative `codex --version` and
   `codex exec --help` probing.
 - Stable optional `failed.code` values for runner and parser failure modes.
@@ -96,31 +96,35 @@ for await (const event of runner.resumeTurn({
 
 Implemented command shape:
 
-- First turn: `codex exec --json --skip-git-repo-check [-m model] --sandbox <sandbox> -C <cwd> <prompt>`
-- Resume: `codex exec resume <codex_session_id> --json --skip-git-repo-check [-m model] <prompt>`
+- First turn: `codex exec --json --color never -C <cwd> [explicit options] <prompt>`
+- Resume: `codex exec --json --color never -C <cwd> [explicit options] resume <codex_session_id> <prompt>`
 
-The resume path still sets the spawned child process `cwd`, but does not pass
-`-C` or `--sandbox` because current Codex resume inherits those from session
-metadata.
+The runner does not pass `--sandbox` or `--skip-git-repo-check` by default.
+Callers must explicitly opt into permissions and repo-check bypasses through the
+typed request fields. High-permission fields such as `sandbox:
+'danger-full-access'`, `approvalMode: 'never'`, and
+`dangerouslyBypassApprovalsAndSandbox` are supported for isolated runners.
 
 For continuous sessions, callers should persist the value from `codex_session`.
 Terminal events (`completed`, `failed`, and `aborted`) also include
 `codexSessionId` when available. On `resumeTurn()`, the runner already knows the
 session id supplied by the caller, so it emits `codex_session` even if the CLI
-does not repeat `thread.started`.
+does not repeat `thread.started`. If the CLI emits a different `thread.started`
+id during resume, the runner fails with `resume_session_mismatch`.
 
 Implemented default runner events use a `kind` discriminator:
 
 - `codex_session`, `turn_started`
 - `text_delta`, `agent_message`, `reasoning`
-- `file_change`, `web_search`, `todo_list`, `approval_request`
+- `file_change`, `web_search`, `todo_list`, `plan_update`, `approval_request`
 - `tool_call`, `tool_result`
 - `exec_started`, `exec_finished`
 - `usage`, `completed`, `failed`, `aborted`, `unknown`
 
 Implemented `failed.code` values include `spawn_error`, `stdout_read_error`,
-`line_too_large`, `queue_overflow`, `codex_exit`, `turn_failed`,
-`stream_error`, and `callback_error`.
+`line_too_large`, `queue_overflow`, `codex_exit`,
+`resume_session_mismatch`, `turn_failed`, `stream_error`, and
+`callback_error`.
 
 Capability detection:
 
@@ -136,8 +140,8 @@ Protocol-style events are opt-in through `toAgentStreamEvent(event, context)` or
 `createProtocolEventMapper(context)`. The adapter emits a `type` discriminator
 and protocol-compatible event names, including `thread_started`,
 `assistant_message`, `reasoning`, `file_change`, `web_search`, `todo_list`,
-`approval_request`, `tool_call`, `tool_result`, `exec_begin`, `exec_end`,
-`usage`, `turn_completed`, `turn_failed`, and `turn_aborted`.
+`plan_update`, `approval_request`, `tool_call`, `tool_result`, `exec_begin`,
+`exec_end`, `usage`, `turn_completed`, `turn_failed`, and `turn_aborted`.
 
 The package currently defines a minimal compatible protocol event type surface
 locally instead of depending on a published `@agentmeshkit/protocol` package.

@@ -101,6 +101,15 @@ export interface TodoListEvent extends AgentStreamEventBase {
   partial?: boolean;
 }
 
+export interface PlanUpdateEvent extends AgentStreamEventBase {
+  type: 'plan_update';
+  turnId: AgentTurnId;
+  itemId: string;
+  steps?: unknown;
+  status?: string;
+  partial?: boolean;
+}
+
 export interface ApprovalRequestEvent extends AgentStreamEventBase {
   type: 'approval_request';
   turnId: AgentTurnId;
@@ -191,6 +200,7 @@ export type AgentStreamEvent =
   | FileChangeEvent
   | WebSearchEvent
   | TodoListEvent
+  | PlanUpdateEvent
   | ApprovalRequestEvent
   | ToolCallEvent
   | ToolResultEvent
@@ -295,6 +305,7 @@ export function toAgentStreamEvent(
         type: 'reasoning',
         itemId: event.itemId,
         text: event.text,
+        delta: event.delta,
         partial: !event.final,
       });
     case 'file_change':
@@ -324,6 +335,15 @@ export function toAgentStreamEvent(
         type: 'todo_list',
         itemId: event.itemId,
         todos: event.todos,
+        status: event.status,
+        partial: !event.final,
+      });
+    case 'plan_update':
+      return withoutUndefined({
+        ...base,
+        type: 'plan_update',
+        itemId: event.itemId,
+        steps: event.steps,
         status: event.status,
         partial: !event.final,
       });

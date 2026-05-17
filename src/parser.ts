@@ -5,9 +5,12 @@ type RawRecord = Record<string, unknown>;
 
 export class CodexJsonlParser {
   private readonly textByItemId = new Map<string, string>();
-  private readonly emittedToolCalls = new Set<string>();
+  private readonly reasoningTextByItemId = new Map<string, string>();
+  private readonly toolCallSnapshots = new Map<string, string>();
+  private readonly toolResultSnapshots = new Map<string, Set<string>>();
   private readonly emittedExecStarts = new Set<string>();
   private readonly emittedExecFinishes = new Set<string>();
+  private syntheticItemCounter = 0;
   lastEvent: CodexRunnerEvent | undefined;
 
   parseLine(line: string): CodexRunnerEvent[] {
@@ -52,9 +55,14 @@ export class CodexJsonlParser {
           this.remember({
             kind: 'failed',
             code: 'stream_error',
-            message: stringValue(event.message) ?? 'Codex stream error',
+            message:
+              extractErrorMessage(event.message ?? event.error) ??
+              'Codex stream error',
           }),
         ];
+      case 'turn.plan.updated':
+      case 'plan_update':
+        return this.planUpdate(event, true);
       case 'item.started':
       case 'item.updated':
       case 'item.completed':
@@ -79,11 +87,11 @@ export class CodexJsonlParser {
   }
 
   private turnCompleted(event: RawRecord): CodexRunnerEvent[] {
-    const usage = normalizeUsage(asRecord(event.usage));
-    return [
-      this.remember({ kind: 'usage', usage }),
-      this.remember({ kind: 'completed', usage, lastEvent: this.lastEvent }),
-    ];
+    const usage = normalizeUsage(event.usage);
+    const events: CodexRunnerEvent[] = [];
+    if (usage) events.push(this.remember({ kind: 'usage', usage }));
+    events.push(this.remember({ kind: 'completed', usage, lastEvent: this.lastEvent }));
+    return events;
   }
 
   private mapItem(item: RawRecord, final: boolean): CodexRunnerEvent[] {
@@ -101,6 +109,9 @@ export class CodexJsonlParser {
         return this.webSearch(item, final);
       case 'todo_list':
         return this.todoList(item, final);
+      case 'plan_update':
+      case 'plan':
+        return this.planUpdate(item, final);
       case 'approval_request':
       case 'exec_approval_request':
       case 'apply_patch_approval_request':
@@ -121,7 +132,9 @@ export class CodexJsonlParser {
           this.remember({
             kind: 'failed',
             code: 'stream_error',
-            message: stringValue(item.message) ?? 'Codex item error',
+            message:
+              extractErrorMessage(item.message ?? item.error) ??
+              'Codex item error',
           }),
         ];
       default:
@@ -130,7 +143,7 @@ export class CodexJsonlParser {
   }
 
   private agentMessage(item: RawRecord, final: boolean): CodexRunnerEvent[] {
-    const itemId = itemIdFor(item);
+    const itemId = this.itemIdFor(item, undefined, 'message');
     const text = extractText(item);
     const events: CodexRunnerEvent[] = [];
     const previous = this.textByItemId.get(itemId) ?? '';
@@ -151,11 +164,17 @@ export class CodexJsonlParser {
   }
 
   private reasoning(item: RawRecord, final: boolean): CodexRunnerEvent[] {
+    const itemId = this.itemIdFor(item, undefined, 'reasoning');
+    const text = extractText(item);
+    const previous = this.reasoningTextByItemId.get(itemId) ?? '';
+    const delta = text.startsWith(previous) ? text.slice(previous.length) : text;
+    if (delta) this.reasoningTextByItemId.set(itemId, text);
     return [
       this.remember({
         kind: 'reasoning',
-        itemId: itemIdFor(item),
-        text: redactString(extractText(item)),
+        itemId,
+        text: redactString(text),
+        delta: delta ? redactString(delta) : undefined,
         final,
       }),
     ];
@@ -165,7 +184,7 @@ export class CodexJsonlParser {
     return [
       this.remember({
         kind: 'file_change',
-        itemId: itemIdFor(item),
+        itemId: this.itemIdFor(item, undefined, 'file-change'),
         path:
           stringValue(item.path) ??
           stringValue(item.file_path) ??
@@ -183,7 +202,7 @@ export class CodexJsonlParser {
     return [
       this.remember({
         kind: 'web_search',
-        itemId: itemIdFor(item),
+        itemId: this.itemIdFor(item, undefined, 'web-search'),
         query: stringValue(item.query) ?? stringValue(asRecord(item.action).query),
         status: stringValue(item.status),
         results: redactValue(item.results ?? item.output ?? item.content),
@@ -197,8 +216,21 @@ export class CodexJsonlParser {
     return [
       this.remember({
         kind: 'todo_list',
-        itemId: itemIdFor(item),
+        itemId: this.itemIdFor(item, undefined, 'todo-list'),
         todos: redactValue(item.todos ?? item.items ?? item.content),
+        status: stringValue(item.status),
+        raw: redactValue(item),
+        final,
+      }),
+    ];
+  }
+
+  private planUpdate(item: RawRecord, final: boolean): CodexRunnerEvent[] {
+    return [
+      this.remember({
+        kind: 'plan_update',
+        itemId: this.itemIdFor(item, undefined, 'plan-update'),
+        steps: redactValue(item.steps ?? item.plan ?? item.items ?? item.content),
         status: stringValue(item.status),
         raw: redactValue(item),
         final,
@@ -221,7 +253,7 @@ export class CodexJsonlParser {
           stringValue(item.approval_id) ??
           stringValue(item.approvalId) ??
           stringValue(item.call_id) ??
-          itemIdFor(item),
+          this.itemIdFor(item, undefined, 'approval'),
         approvalType,
         command: stringValue(item.command) ?? stringValue(item.cmd),
         reason:
@@ -235,7 +267,7 @@ export class CodexJsonlParser {
   }
 
   private commandExecution(item: RawRecord, final: boolean): CodexRunnerEvent[] {
-    const execId = itemIdFor(item);
+    const execId = this.itemIdFor(item, undefined, 'exec');
     const command = redactString(stringValue(item.command) ?? '');
     const status = stringValue(item.status);
     const output = stringValue(item.aggregated_output) ?? stringValue(item.output);
@@ -277,7 +309,7 @@ export class CodexJsonlParser {
   }
 
   private mcpToolCall(item: RawRecord, final: boolean): CodexRunnerEvent[] {
-    const toolCallId = itemIdFor(item);
+    const toolCallId = this.itemIdFor(item, undefined, 'mcp-tool');
     const server = stringValue(item.server);
     const tool = stringValue(item.tool) ?? stringValue(item.name) ?? 'mcp_tool_call';
     const name = server ? `${server}.${tool}` : tool;
@@ -287,23 +319,22 @@ export class CodexJsonlParser {
     const error = extractErrorMessage(item.error);
     const terminalStatus = final || status === 'completed' || status === 'failed' || Boolean(error);
     if (terminalStatus) {
-      events.push(
-        this.remember({
-          kind: 'tool_result',
-          toolCallId,
-          ok: !error && status !== 'failed',
-          result: redactValue(item.result ?? item.output ?? item.content),
-          error,
-          raw: redactValue(item),
-        }),
-      );
+      const resultEvent = this.toolResultOnce({
+        kind: 'tool_result',
+        toolCallId,
+        ok: !error && status !== 'failed',
+        result: redactValue(item.result ?? item.output ?? item.content),
+        error,
+        raw: redactValue(item),
+      });
+      if (resultEvent) events.push(resultEvent);
     }
 
     return events;
   }
 
   private genericToolCall(item: RawRecord, final: boolean): CodexRunnerEvent[] {
-    const toolCallId = itemIdFor(item, stringValue(item.call_id));
+    const toolCallId = this.itemIdFor(item, stringValue(item.call_id), 'tool');
     const name = stringValue(item.name) ?? stringValue(item.tool) ?? 'tool_call';
     const events = this.emitToolCallOnce(
       toolCallId,
@@ -314,34 +345,32 @@ export class CodexJsonlParser {
     );
 
     if (final && (item.output !== undefined || item.result !== undefined || item.error !== undefined)) {
-      events.push(
-        this.remember({
-          kind: 'tool_result',
-          toolCallId,
-          ok: !item.error,
-          result: redactValue(item.result ?? item.output),
-          error: extractErrorMessage(item.error),
-          raw: redactValue(item),
-        }),
-      );
+      const resultEvent = this.toolResultOnce({
+        kind: 'tool_result',
+        toolCallId,
+        ok: !item.error,
+        result: redactValue(item.result ?? item.output),
+        error: extractErrorMessage(item.error),
+        raw: redactValue(item),
+      });
+      if (resultEvent) events.push(resultEvent);
     }
 
     return events;
   }
 
   private genericToolResult(item: RawRecord): CodexRunnerEvent[] {
-    const toolCallId = stringValue(item.call_id) ?? itemIdFor(item);
+    const toolCallId = stringValue(item.call_id) ?? this.itemIdFor(item, undefined, 'tool-result');
     const error = extractErrorMessage(item.error);
-    return [
-      this.remember({
-        kind: 'tool_result',
-        toolCallId,
-        ok: !error,
-        result: redactValue(item.output ?? item.result ?? item.content),
-        error,
-        raw: redactValue(item),
-      }),
-    ];
+    const event = this.toolResultOnce({
+      kind: 'tool_result',
+      toolCallId,
+      ok: !error,
+      result: redactValue(item.output ?? item.result ?? item.content),
+      error,
+      raw: redactValue(item),
+    });
+    return event ? [event] : [];
   }
 
   private emitToolCallOnce(
@@ -351,18 +380,47 @@ export class CodexJsonlParser {
     status: string | undefined,
     raw: RawRecord,
   ): CodexRunnerEvent[] {
-    if (this.emittedToolCalls.has(toolCallId)) return [];
-    this.emittedToolCalls.add(toolCallId);
-    return [
-      this.remember({
-        kind: 'tool_call',
-        toolCallId,
-        name,
-        arguments: redactValue(args),
-        status,
-        raw: redactValue(raw),
-      }),
-    ];
+    const event = {
+      kind: 'tool_call' as const,
+      toolCallId,
+      name,
+      arguments: redactValue(args),
+      status,
+      raw: redactValue(raw),
+    };
+    const snapshot = stableStringify({
+      name: event.name,
+      arguments: event.arguments,
+      status: event.status,
+    });
+    if (this.toolCallSnapshots.get(toolCallId) === snapshot) return [];
+    this.toolCallSnapshots.set(toolCallId, snapshot);
+    return [this.remember(event)];
+  }
+
+  private toolResultOnce(
+    event: Extract<CodexRunnerEvent, { kind: 'tool_result' }>,
+  ): Extract<CodexRunnerEvent, { kind: 'tool_result' }> | undefined {
+    const snapshot = stableStringify({
+      ok: event.ok,
+      result: event.result,
+      error: event.error,
+    });
+    const snapshots = this.toolResultSnapshots.get(event.toolCallId) ?? new Set<string>();
+    if (snapshots.has(snapshot)) return undefined;
+    snapshots.add(snapshot);
+    this.toolResultSnapshots.set(event.toolCallId, snapshots);
+    return this.remember(event);
+  }
+
+  private itemIdFor(item: RawRecord, fallback?: string, prefix = 'item'): string {
+    return (
+      stringValue(item.id) ??
+      stringValue(item.item_id) ??
+      stringValue(item.itemId) ??
+      fallback ??
+      `synthetic-${prefix}-${++this.syntheticItemCounter}`
+    );
   }
 
   private remember<T extends CodexRunnerEvent>(event: T): T {
@@ -378,7 +436,9 @@ export function parseCodexJsonl(jsonl: string): CodexRunnerEvent[] {
     .flatMap((line) => parser.parseLine(line));
 }
 
-function normalizeUsage(usage: RawRecord): CodexRunnerUsage {
+function normalizeUsage(value: unknown): CodexRunnerUsage | undefined {
+  if (value === undefined || value === null) return undefined;
+  const usage = asRecord(value);
   return {
     inputTokens: numberValue(usage.input_tokens) ?? numberValue(usage.inputTokens) ?? 0,
     cachedInputTokens:
@@ -413,11 +473,8 @@ function extractText(item: RawRecord): string {
 function extractErrorMessage(value: unknown): string | undefined {
   if (typeof value === 'string') return redactString(value);
   const record = asRecord(value);
-  return stringValue(record.message) ?? stringValue(record.error);
-}
-
-function itemIdFor(item: RawRecord, fallback?: string): string {
-  return stringValue(item.id) ?? fallback ?? 'unknown';
+  const message = stringValue(record.message) ?? stringValue(record.error);
+  return message === undefined ? undefined : redactString(message);
 }
 
 function asRecord(value: unknown): RawRecord {
@@ -436,4 +493,19 @@ function normalizeApprovalType(value: string | undefined): 'exec' | 'apply_patch
   if (value === 'exec' || value === 'command') return 'exec';
   if (value === 'apply_patch' || value === 'patch') return 'apply_patch';
   return 'unknown';
+}
+
+function stableStringify(value: unknown): string {
+  return JSON.stringify(sortObject(value));
+}
+
+function sortObject(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortObject);
+  if (typeof value !== 'object' || value === null) return value;
+  const record = value as RawRecord;
+  return Object.fromEntries(
+    Object.keys(record)
+      .sort()
+      .map((key) => [key, sortObject(record[key])]),
+  );
 }
