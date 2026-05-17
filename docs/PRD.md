@@ -22,7 +22,8 @@ the same behavior.
 ## Goals
 
 - Provide one reliable wrapper around Codex CLI execution.
-- Normalize Codex JSONL into `@agentmeshkit/protocol` events.
+- Normalize Codex JSONL into stable runner-local events, with an adapter for
+  `@agentmeshkit/protocol`-style events.
 - Support first turn, resumed turns, cancellation, timeout, and process exit
   diagnostics.
 - Keep authentication external through `codexHome`.
@@ -82,7 +83,7 @@ The resume path still sets the spawned child process `cwd`, but does not pass
 `-C` or `--sandbox` because current Codex resume inherits those from session
 metadata.
 
-Implemented events use a `kind` discriminator:
+Implemented default runner events use a `kind` discriminator:
 
 - `codex_session`, `turn_started`
 - `text_delta`, `agent_message`, `reasoning`
@@ -90,10 +91,21 @@ Implemented events use a `kind` discriminator:
 - `exec_started`, `exec_finished`
 - `usage`, `completed`, `failed`, `aborted`, `unknown`
 
+Protocol-style events are opt-in through `toAgentStreamEvent(event, context)` or
+`createProtocolEventMapper(context)`. The adapter emits a `type` discriminator
+and protocol-compatible event names, including `thread_started`,
+`assistant_message`, `reasoning`, `tool_call`, `tool_result`, `exec_begin`,
+`exec_end`, `usage`, `turn_completed`, `turn_failed`, and `turn_aborted`.
+
+The package currently defines a minimal compatible protocol event type surface
+locally instead of depending on a published `@agentmeshkit/protocol` package.
+Once protocol is published with the required contract, the adapter can switch to
+direct type imports without changing the default `CodexRunnerEvent` stream.
+
 ## Acceptance Criteria
 
 - Unit tests cover first turn, resume, command execution, text deltas, failed
-  turns, and process errors.
+  turns, process errors, adapter mappings, and resumed-turn abort mappings.
 - Fixture tests replay real Codex JSONL without spawning Codex.
 - No secrets are logged.
 - The package can be used without AgentWeb.
