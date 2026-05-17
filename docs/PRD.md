@@ -42,6 +42,8 @@ the same behavior.
 - Async iterable or callback stream of normalized events.
 - Codex CLI 0.130+ `command_execution` support.
 - Structured failure result with exit code, stderr tail, and last event.
+- `timeoutMs`, `AbortSignal`, and extra environment support.
+- Secret redaction for emitted raw events, stderr tails, and error messages.
 
 ## Public API Sketch
 
@@ -58,6 +60,36 @@ for await (const event of runner.runTurn({
 }
 ```
 
+Resume:
+
+```ts
+for await (const event of runner.resumeTurn({
+  codexSessionId,
+  prompt: 'Continue',
+  cwd: '/repo',
+  codexHome: '/accounts/default',
+})) {
+  send(event);
+}
+```
+
+Implemented command shape:
+
+- First turn: `codex exec --json --skip-git-repo-check [-m model] --sandbox <sandbox> -C <cwd> <prompt>`
+- Resume: `codex exec resume <codex_session_id> --json --skip-git-repo-check [-m model] <prompt>`
+
+The resume path still sets the spawned child process `cwd`, but does not pass
+`-C` or `--sandbox` because current Codex resume inherits those from session
+metadata.
+
+Implemented events use a `kind` discriminator:
+
+- `codex_session`, `turn_started`
+- `text_delta`, `agent_message`, `reasoning`
+- `tool_call`, `tool_result`
+- `exec_started`, `exec_finished`
+- `usage`, `completed`, `failed`, `aborted`, `unknown`
+
 ## Acceptance Criteria
 
 - Unit tests cover first turn, resume, command execution, text deltas, failed
@@ -65,6 +97,7 @@ for await (const event of runner.runTurn({
 - Fixture tests replay real Codex JSONL without spawning Codex.
 - No secrets are logged.
 - The package can be used without AgentWeb.
+- Default test suite does not require a logged-in Codex CLI.
 
 ## Milestones
 
@@ -72,4 +105,3 @@ for await (const event of runner.runTurn({
 2. Implement runner API around child process.
 3. Add cancellation and timeout tests.
 4. Publish `0.1.0`.
-

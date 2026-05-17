@@ -1,0 +1,11 @@
+{"type":"thread.started","thread_id":"codex-session-123"}
+{"type":"turn.started"}
+{"type":"item.updated","item":{"id":"msg-1","type":"agent_message","text":"Hello"}}
+{"type":"item.updated","item":{"id":"msg-1","type":"agent_message","text":"Hello world"}}
+{"type":"item.completed","item":{"id":"msg-1","type":"agent_message","text":"Hello world"}}
+{"type":"item.completed","item":{"id":"reason-1","type":"reasoning","text":"Need inspect repo"}}
+{"type":"item.started","item":{"id":"exec-1","type":"command_execution","command":"pnpm test","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"exec-1","type":"command_execution","command":"pnpm test","status":"completed","aggregated_output":"ok 1 test","exit_code":0}}
+{"type":"item.started","item":{"id":"tool-1","type":"mcp_tool_call","server":"github","tool":"get_pull_request","arguments":{"owner":"acme","repo":"demo"},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"tool-1","type":"mcp_tool_call","server":"github","tool":"get_pull_request","arguments":{"owner":"acme","repo":"demo"},"status":"completed","result":{"number":1}}}
+{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":5,"reasoning_output_tokens":3}}
