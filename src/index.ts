@@ -1,3 +1,4 @@
+export { detectCodexCliCapabilities } from './capabilities.js';
 export { CodexJsonlParser, parseCodexJsonl } from './parser.js';
 export { createProtocolEventMapper, toAgentStreamEvent } from './protocol.js';
 export { redactEnvironment, redactString, redactValue } from './redact.js';
@@ -15,10 +16,13 @@ export type {
   AssistantMessageEvent,
   ExecBeginEvent,
   ExecEndEvent,
+  ApprovalRequestEvent,
+  FileChangeEvent,
   ProtocolEventMapper,
   ProtocolEventMapperContext,
   RawEvent,
   ReasoningEvent,
+  TodoListEvent,
   ThreadStartedEvent,
   TokenUsage,
   ToolCallEvent,
@@ -28,13 +32,22 @@ export type {
   TurnFailedEvent,
   TurnStartedEvent,
   UsageEvent,
+  WebSearchEvent,
 } from './protocol.js';
+export type {
+  CodexCapabilityChildProcess,
+  CodexCapabilitySpawnFunction,
+  CodexCapabilitySpawnInvocation,
+  CodexCliCapabilities,
+  DetectCodexCliCapabilitiesOptions,
+} from './capabilities.js';
 export type {
   CodexChildProcess,
   CodexExecInvocation,
   CodexResumeTurnRequest,
   CodexRunner,
   CodexRunnerEnvironment,
+  CodexRunnerErrorCode,
   CodexRunnerEvent,
   CodexRunnerOptions,
   CodexRunnerUsage,

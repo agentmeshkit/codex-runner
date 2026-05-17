@@ -11,12 +11,58 @@ export type CodexRunnerUsage = {
   reasoningOutputTokens: number;
 };
 
+export type CodexRunnerErrorCode =
+  | 'spawn_error'
+  | 'stdout_read_error'
+  | 'line_too_large'
+  | 'queue_overflow'
+  | 'codex_exit'
+  | 'turn_failed'
+  | 'stream_error'
+  | 'callback_error';
+
 export type CodexRunnerEvent =
   | { kind: 'turn_started' }
   | { kind: 'codex_session'; codexSessionId: string }
   | { kind: 'text_delta'; itemId: string; text: string }
   | { kind: 'agent_message'; itemId: string; text: string; final: boolean }
   | { kind: 'reasoning'; itemId: string; text: string; final: boolean }
+  | {
+      kind: 'file_change';
+      itemId: string;
+      path?: string;
+      status?: string;
+      diff?: string;
+      changes?: unknown;
+      raw?: unknown;
+      final: boolean;
+    }
+  | {
+      kind: 'web_search';
+      itemId: string;
+      query?: string;
+      status?: string;
+      results?: unknown;
+      raw?: unknown;
+      final: boolean;
+    }
+  | {
+      kind: 'todo_list';
+      itemId: string;
+      todos?: unknown;
+      status?: string;
+      raw?: unknown;
+      final: boolean;
+    }
+  | {
+      kind: 'approval_request';
+      approvalId: string;
+      approvalType: 'exec' | 'apply_patch' | 'unknown';
+      command?: string;
+      reason?: string;
+      status?: string;
+      raw?: unknown;
+    }
   | {
       kind: 'tool_call';
       toolCallId: string;
@@ -55,6 +101,7 @@ export type CodexRunnerEvent =
   | {
       kind: 'failed';
       message: string;
+      code?: CodexRunnerErrorCode;
       exitCode?: number | null;
       stderr?: string;
       lastEvent?: CodexRunnerEvent;
@@ -74,6 +121,9 @@ export type CodexRunnerOptions = {
   codexBin?: string;
   env?: CodexRunnerEnvironment;
   spawn?: CodexSpawnFunction;
+  maxStdoutLineBytes?: number;
+  maxBufferedEvents?: number;
+  killGraceMs?: number;
 };
 
 export type CodexTurnRequest = {

@@ -100,4 +100,104 @@ describe('parseCodexJsonl', () => {
     expect(JSON.stringify(events)).not.toContain('sk-proj-abc1234567890secret');
     expect(JSON.stringify(events)).toContain('[REDACTED]');
   });
+
+  it('adds stable error codes for parser-originated failures', () => {
+    expect(parseCodexJsonl('{bad json')[0]).toMatchObject({
+      kind: 'failed',
+      code: 'stream_error',
+    });
+
+    expect(
+      parseCodexJsonl(
+        JSON.stringify({
+          type: 'turn.failed',
+          error: { message: 'model failed' },
+        }),
+      )[0],
+    ).toMatchObject({
+      kind: 'failed',
+      code: 'turn_failed',
+      message: 'model failed',
+    });
+  });
+
+  it('maps file changes, web search, todo lists, and approval requests', () => {
+    const events = parseCodexJsonl(
+      [
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'file-1',
+            type: 'file_change',
+            path: 'src/app.ts',
+            status: 'modified',
+            diff: '+console.log("ok")',
+          },
+        }),
+        JSON.stringify({
+          type: 'item.updated',
+          item: {
+            id: 'search-1',
+            type: 'web_search',
+            query: 'codex cli sdk',
+            status: 'running',
+          },
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'todo-1',
+            type: 'todo_list',
+            todos: [{ text: 'write tests', status: 'completed' }],
+          },
+        }),
+        JSON.stringify({
+          type: 'item.started',
+          item: {
+            id: 'approval-1',
+            type: 'exec_approval_request',
+            command: 'pnpm test',
+            reason: 'verify changes',
+          },
+        }),
+      ].join('\n'),
+    );
+
+    expect(events).toContainEqual({
+      kind: 'file_change',
+      itemId: 'file-1',
+      path: 'src/app.ts',
+      status: 'modified',
+      diff: '+console.log("ok")',
+      changes: undefined,
+      raw: expect.objectContaining({ type: 'file_change' }),
+      final: true,
+    });
+    expect(events).toContainEqual({
+      kind: 'web_search',
+      itemId: 'search-1',
+      query: 'codex cli sdk',
+      status: 'running',
+      results: undefined,
+      raw: expect.objectContaining({ type: 'web_search' }),
+      final: false,
+    });
+    expect(events).toContainEqual({
+      kind: 'todo_list',
+      itemId: 'todo-1',
+      todos: [{ text: 'write tests', status: 'completed' }],
+      status: undefined,
+      raw: expect.objectContaining({ type: 'todo_list' }),
+      final: true,
+    });
+    expect(events).toContainEqual({
+      kind: 'approval_request',
+      approvalId: 'approval-1',
+      approvalType: 'exec',
+      command: 'pnpm test',
+      reason: 'verify changes',
+      status: undefined,
+      raw: expect.objectContaining({ type: 'exec_approval_request' }),
+    });
+  });
 });

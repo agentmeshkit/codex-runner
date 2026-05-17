@@ -26,6 +26,12 @@ the same behavior.
   `@agentmeshkit/protocol`-style events.
 - Support first turn, resumed turns, cancellation, timeout, and process exit
   diagnostics.
+- Bound stdout JSONL lines and queued events so malformed CLI output or slow
+  consumers cannot grow memory without limit.
+- Clean up the Codex child process when callers stop consuming a stream early.
+- Detect installed Codex CLI capabilities before a turn when callers want setup
+  diagnostics.
+- Isolate caller `onEvent` callback failures from the runner lifecycle.
 - Keep authentication external through `codexHome`.
 
 ## Non-Goals
@@ -45,6 +51,12 @@ the same behavior.
 - Structured failure result with exit code, stderr tail, and last event.
 - `timeoutMs`, `AbortSignal`, and extra environment support.
 - Secret redaction for emitted raw events, stderr tails, and error messages.
+- `maxStdoutLineBytes`, `maxBufferedEvents`, and `killGraceMs` runner options.
+- Explicit parser support for `file_change`, `web_search`, `todo_list`, and
+  approval request items.
+- `detectCodexCliCapabilities()` for conservative `codex --version` and
+  `codex exec --help` probing.
+- Stable optional `failed.code` values for runner and parser failure modes.
 
 ## Public API Sketch
 
@@ -87,15 +99,31 @@ Implemented default runner events use a `kind` discriminator:
 
 - `codex_session`, `turn_started`
 - `text_delta`, `agent_message`, `reasoning`
+- `file_change`, `web_search`, `todo_list`, `approval_request`
 - `tool_call`, `tool_result`
 - `exec_started`, `exec_finished`
 - `usage`, `completed`, `failed`, `aborted`, `unknown`
 
+Implemented `failed.code` values include `spawn_error`, `stdout_read_error`,
+`line_too_large`, `queue_overflow`, `codex_exit`, `turn_failed`,
+`stream_error`, and `callback_error`.
+
+Capability detection:
+
+```ts
+const capabilities = await detectCodexCliCapabilities({ codexBin: 'codex' });
+```
+
+The detector returns conservative unsupported capabilities with warnings on
+spawn errors, command failures, or timeout. It throws only for invalid caller
+options.
+
 Protocol-style events are opt-in through `toAgentStreamEvent(event, context)` or
 `createProtocolEventMapper(context)`. The adapter emits a `type` discriminator
 and protocol-compatible event names, including `thread_started`,
-`assistant_message`, `reasoning`, `tool_call`, `tool_result`, `exec_begin`,
-`exec_end`, `usage`, `turn_completed`, `turn_failed`, and `turn_aborted`.
+`assistant_message`, `reasoning`, `file_change`, `web_search`, `todo_list`,
+`approval_request`, `tool_call`, `tool_result`, `exec_begin`, `exec_end`,
+`usage`, `turn_completed`, `turn_failed`, and `turn_aborted`.
 
 The package currently defines a minimal compatible protocol event type surface
 locally instead of depending on a published `@agentmeshkit/protocol` package.
@@ -106,6 +134,10 @@ direct type imports without changing the default `CodexRunnerEvent` stream.
 
 - Unit tests cover first turn, resume, command execution, text deltas, failed
   turns, process errors, adapter mappings, and resumed-turn abort mappings.
+- Unit tests cover early async-iterator break cleanup, oversized stdout JSONL
+  failure, event queue overflow failure, and newly normalized Codex item types.
+- Unit tests cover capability detection, callback failure isolation, and stable
+  failure codes.
 - Fixture tests replay real Codex JSONL without spawning Codex.
 - No secrets are logged.
 - The package can be used without AgentWeb.

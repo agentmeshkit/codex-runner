@@ -6,15 +6,18 @@ import {
   createCodexRunner,
   type CodexChildProcess,
   type CodexExecInvocation,
+  type CodexRunnerEvent,
 } from '../src/index.js';
 
 class FakeChild extends EventEmitter implements CodexChildProcess {
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   killed = false;
+  killSignals: Array<NodeJS.Signals | number | undefined> = [];
 
-  kill(): boolean {
+  kill(signal?: NodeJS.Signals | number): boolean {
     this.killed = true;
+    this.killSignals.push(signal);
     setImmediate(() => {
       this.stdout.end();
       this.stderr.end();
@@ -179,6 +182,7 @@ describe('createCodexRunner', () => {
 
     expect(events.at(-1)).toMatchObject({
       kind: 'failed',
+      code: 'codex_exit',
       message: 'codex exit 2',
       exitCode: 2,
     });
@@ -197,8 +201,46 @@ describe('createCodexRunner', () => {
     );
 
     expect(events).toEqual([
-      { kind: 'failed', message: 'spawn error: ENOENT token=[REDACTED]' },
+      {
+        kind: 'failed',
+        code: 'spawn_error',
+        message: 'spawn error: ENOENT token=[REDACTED]',
+      },
     ]);
+  });
+
+  it('isolates onEvent errors, emits callback_error, and kills the child', async () => {
+    const child = new FakeChild();
+    const callbackEvents: CodexRunnerEvent[] = [];
+    const runner = createCodexRunner({
+      spawn() {
+        setImmediate(() => {
+          child.stdout.write('{"type":"thread.started","thread_id":"s1"}\n');
+        });
+        return child;
+      },
+    });
+
+    const events = await collect(
+      runner.runTurn({
+        prompt: 'callback throws',
+        cwd: '/tmp/repo',
+        onEvent(event) {
+          callbackEvents.push(event);
+          throw new Error('callback leaked token=abc123');
+        },
+      }),
+    );
+
+    expect(child.killed).toBe(true);
+    expect(child.killSignals).toContain('SIGTERM');
+    expect(callbackEvents).toEqual([{ kind: 'codex_session', codexSessionId: 's1' }]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: 'failed',
+      code: 'callback_error',
+      message: 'onEvent callback error: callback leaked token=[REDACTED]',
+    });
   });
 
   it('kills and emits aborted on timeout', async () => {
@@ -211,5 +253,79 @@ describe('createCodexRunner', () => {
 
     expect(child.killed).toBe(true);
     expect(events.at(-1)).toMatchObject({ kind: 'aborted', reason: 'timeout' });
+  });
+
+  it('kills the child when the consumer stops iterating early', async () => {
+    const child = new FakeChild();
+    const runner = createCodexRunner({ spawn: () => child });
+
+    const iterator = runner
+      .runTurn({ prompt: 'stream', cwd: '/tmp/repo' })
+      [Symbol.asyncIterator]();
+
+    child.stdout.write('{"type":"thread.started","thread_id":"s1"}\n');
+    await expect(iterator.next()).resolves.toEqual({
+      value: { kind: 'codex_session', codexSessionId: 's1' },
+      done: false,
+    });
+
+    await iterator.return?.();
+
+    expect(child.killed).toBe(true);
+    expect(child.killSignals).toContain('SIGTERM');
+  });
+
+  it('fails and kills the child when stdout JSONL line exceeds the configured limit', async () => {
+    const child = new FakeChild();
+    const runner = createCodexRunner({
+      maxStdoutLineBytes: 8,
+      spawn() {
+        setImmediate(() => {
+          child.stdout.write('{"type":"turn.completed"}\n');
+        });
+        return child;
+      },
+    });
+
+    const events = await collect(
+      runner.runTurn({ prompt: 'too long', cwd: '/tmp/repo' }),
+    );
+
+    expect(child.killed).toBe(true);
+    expect(events.at(-1)).toMatchObject({
+      kind: 'failed',
+      code: 'line_too_large',
+      message: expect.stringContaining('Codex stdout JSONL line exceeded 8 bytes'),
+    });
+  });
+
+  it('fails and kills the child when buffered events exceed the configured limit', async () => {
+    const child = new FakeChild();
+    const runner = createCodexRunner({
+      maxBufferedEvents: 0,
+      spawn() {
+        setImmediate(() => {
+          child.stdout.write(
+            [
+              '{"type":"thread.started","thread_id":"s1"}',
+              '{"type":"turn.started"}',
+              '{"type":"turn.completed","usage":{}}',
+            ].join('\n') + '\n',
+          );
+        });
+        return child;
+      },
+    });
+
+    const events = await collect(
+      runner.runTurn({ prompt: 'overflow', cwd: '/tmp/repo' }),
+    );
+
+    expect(child.killed).toBe(true);
+    expect(events.at(-1)).toMatchObject({
+      kind: 'failed',
+      code: 'queue_overflow',
+      message: 'Codex event queue exceeded maxBufferedEvents=0',
+    });
   });
 });

@@ -21,6 +21,7 @@ export class CodexJsonlParser {
       return [
         this.remember({
           kind: 'failed',
+          code: 'stream_error',
           message: `invalid Codex JSONL: ${redactString((error as Error).message)}`,
         }),
       ];
@@ -42,6 +43,7 @@ export class CodexJsonlParser {
         return [
           this.remember({
             kind: 'failed',
+            code: 'turn_failed',
             message: extractErrorMessage(event.error) ?? 'turn failed',
           }),
         ];
@@ -49,6 +51,7 @@ export class CodexJsonlParser {
         return [
           this.remember({
             kind: 'failed',
+            code: 'stream_error',
             message: stringValue(event.message) ?? 'Codex stream error',
           }),
         ];
@@ -86,6 +89,16 @@ export class CodexJsonlParser {
         return this.agentMessage(item, final);
       case 'reasoning':
         return this.reasoning(item, final);
+      case 'file_change':
+        return this.fileChange(item, final);
+      case 'web_search':
+        return this.webSearch(item, final);
+      case 'todo_list':
+        return this.todoList(item, final);
+      case 'approval_request':
+      case 'exec_approval_request':
+      case 'apply_patch_approval_request':
+        return this.approvalRequest(item, type);
       case 'command':
       case 'command_execution':
         return this.commandExecution(item, final);
@@ -101,6 +114,7 @@ export class CodexJsonlParser {
         return [
           this.remember({
             kind: 'failed',
+            code: 'stream_error',
             message: stringValue(item.message) ?? 'Codex item error',
           }),
         ];
@@ -137,6 +151,79 @@ export class CodexJsonlParser {
         itemId: itemIdFor(item),
         text: redactString(extractText(item)),
         final,
+      }),
+    ];
+  }
+
+  private fileChange(item: RawRecord, final: boolean): CodexRunnerEvent[] {
+    return [
+      this.remember({
+        kind: 'file_change',
+        itemId: itemIdFor(item),
+        path:
+          stringValue(item.path) ??
+          stringValue(item.file_path) ??
+          stringValue(item.filePath),
+        status: stringValue(item.status),
+        diff: stringValue(item.diff) ?? stringValue(item.patch),
+        changes: redactValue(item.changes ?? item.files ?? item.content),
+        raw: redactValue(item),
+        final,
+      }),
+    ];
+  }
+
+  private webSearch(item: RawRecord, final: boolean): CodexRunnerEvent[] {
+    return [
+      this.remember({
+        kind: 'web_search',
+        itemId: itemIdFor(item),
+        query: stringValue(item.query) ?? stringValue(asRecord(item.action).query),
+        status: stringValue(item.status),
+        results: redactValue(item.results ?? item.output ?? item.content),
+        raw: redactValue(item),
+        final,
+      }),
+    ];
+  }
+
+  private todoList(item: RawRecord, final: boolean): CodexRunnerEvent[] {
+    return [
+      this.remember({
+        kind: 'todo_list',
+        itemId: itemIdFor(item),
+        todos: redactValue(item.todos ?? item.items ?? item.content),
+        status: stringValue(item.status),
+        raw: redactValue(item),
+        final,
+      }),
+    ];
+  }
+
+  private approvalRequest(item: RawRecord, type: string): CodexRunnerEvent[] {
+    const approvalType =
+      type === 'exec_approval_request'
+        ? 'exec'
+        : type === 'apply_patch_approval_request'
+          ? 'apply_patch'
+          : normalizeApprovalType(stringValue(item.approval_type) ?? stringValue(item.approvalType));
+
+    return [
+      this.remember({
+        kind: 'approval_request',
+        approvalId:
+          stringValue(item.approval_id) ??
+          stringValue(item.approvalId) ??
+          stringValue(item.call_id) ??
+          itemIdFor(item),
+        approvalType,
+        command: stringValue(item.command) ?? stringValue(item.cmd),
+        reason:
+          stringValue(item.reason) ??
+          stringValue(item.message) ??
+          stringValue(item.description),
+        status: stringValue(item.status),
+        raw: redactValue(item),
       }),
     ];
   }
@@ -337,4 +424,10 @@ function stringValue(value: unknown): string | undefined {
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeApprovalType(value: string | undefined): 'exec' | 'apply_patch' | 'unknown' {
+  if (value === 'exec' || value === 'command') return 'exec';
+  if (value === 'apply_patch' || value === 'patch') return 'apply_patch';
+  return 'unknown';
 }

@@ -71,6 +71,46 @@ export interface ReasoningEvent extends AgentStreamEventBase {
   summary?: string;
 }
 
+export interface FileChangeEvent extends AgentStreamEventBase {
+  type: 'file_change';
+  turnId: AgentTurnId;
+  itemId: string;
+  path?: string;
+  status?: string;
+  diff?: string;
+  changes?: unknown;
+  partial?: boolean;
+}
+
+export interface WebSearchEvent extends AgentStreamEventBase {
+  type: 'web_search';
+  turnId: AgentTurnId;
+  itemId: string;
+  query?: string;
+  status?: string;
+  results?: unknown;
+  partial?: boolean;
+}
+
+export interface TodoListEvent extends AgentStreamEventBase {
+  type: 'todo_list';
+  turnId: AgentTurnId;
+  itemId: string;
+  todos?: unknown;
+  status?: string;
+  partial?: boolean;
+}
+
+export interface ApprovalRequestEvent extends AgentStreamEventBase {
+  type: 'approval_request';
+  turnId: AgentTurnId;
+  approvalId: string;
+  approvalType: 'exec' | 'apply_patch' | 'unknown';
+  command?: string;
+  reason?: string;
+  status?: string;
+}
+
 export interface ToolCallEvent extends AgentStreamEventBase {
   type: 'tool_call';
   turnId: AgentTurnId;
@@ -148,6 +188,10 @@ export type AgentStreamEvent =
   | TurnStartedEvent
   | AssistantMessageEvent
   | ReasoningEvent
+  | FileChangeEvent
+  | WebSearchEvent
+  | TodoListEvent
+  | ApprovalRequestEvent
   | ToolCallEvent
   | ToolResultEvent
   | ExecBeginEvent
@@ -247,6 +291,46 @@ export function toAgentStreamEvent(
         text: event.text,
         partial: !event.final,
       });
+    case 'file_change':
+      return withoutUndefined({
+        ...base,
+        type: 'file_change',
+        itemId: event.itemId,
+        path: event.path,
+        status: event.status,
+        diff: event.diff,
+        changes: event.changes,
+        partial: !event.final,
+      });
+    case 'web_search':
+      return withoutUndefined({
+        ...base,
+        type: 'web_search',
+        itemId: event.itemId,
+        query: event.query,
+        status: event.status,
+        results: event.results,
+        partial: !event.final,
+      });
+    case 'todo_list':
+      return withoutUndefined({
+        ...base,
+        type: 'todo_list',
+        itemId: event.itemId,
+        todos: event.todos,
+        status: event.status,
+        partial: !event.final,
+      });
+    case 'approval_request':
+      return withoutUndefined({
+        ...base,
+        type: 'approval_request',
+        approvalId: event.approvalId,
+        approvalType: event.approvalType,
+        command: event.command,
+        reason: event.reason,
+        status: event.status,
+      });
     case 'tool_call':
       return withoutUndefined({
         ...base,
@@ -299,6 +383,7 @@ export function toAgentStreamEvent(
         type: 'turn_failed',
         error: {
           message: event.message,
+          code: event.code,
           cause: withoutUndefined({
             exitCode: event.exitCode,
             stderr: event.stderr,
