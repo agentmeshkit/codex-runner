@@ -129,6 +129,7 @@ async function* runCodexExec(
   let stderr = '';
   let abortedReason: 'signal' | 'timeout' | undefined;
   let completedOrFailedInStream = false;
+  let terminalEventInStream: 'completed' | 'failed' | undefined;
   let childExited = false;
   let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
   let knownCodexSessionId = options.codexSessionId;
@@ -258,6 +259,7 @@ async function* runCodexExec(
       for (const event of parser.parseLine(chunk)) {
         if (event.kind === 'completed' || event.kind === 'failed') {
           completedOrFailedInStream = true;
+          terminalEventInStream ??= event.kind;
         }
         if (!pushRunnerEvent(event)) break;
       }
@@ -312,13 +314,18 @@ async function* runCodexExec(
 
     await Promise.allSettled([stdoutPump, stderrPump]);
 
+    if (terminalEventInStream) {
+      eventQueue.close();
+      return;
+    }
+
     if (abortedReason) {
       pushRunnerEvent({
-          kind: 'aborted',
-          reason: abortedReason,
-          exitCode: result.code,
-          stderr: stderr ? redactString(stderr) : undefined,
-          lastEvent: parser.lastEvent,
+        kind: 'aborted',
+        reason: abortedReason,
+        exitCode: result.code,
+        stderr: stderr ? redactString(stderr) : undefined,
+        lastEvent: parser.lastEvent,
       });
       eventQueue.close();
       return;

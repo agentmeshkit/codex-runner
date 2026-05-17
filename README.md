@@ -152,6 +152,10 @@ runner emits a `failed` event with `code: 'callback_error'` without recursively
 calling the same callback for that synthetic failure, then terminates the child
 process.
 
+If Codex stdout already emits a terminal `completed` or `failed` event, that
+stream terminal state wins. A later non-zero process exit or abort signal is not
+reported as a second terminal event.
+
 ## Tests
 
 Default tests use fixtures and fake child processes; they do not spawn a real

@@ -314,6 +314,62 @@ describe('createCodexRunner', () => {
     expect(JSON.stringify(events)).not.toContain('sk-proj-secret123456789');
   });
 
+  it('does not append codex_exit after a streamed turn.failed terminal event', async () => {
+    const child = new FakeChild();
+    const runner = createCodexRunner({
+      spawn() {
+        setImmediate(() => {
+          child.stdout.write(
+            '{"type":"turn.failed","error":{"message":"model rejected request"}}\n',
+          );
+          child.stdout.end();
+          child.stderr.end();
+          child.emit('exit', 2, null);
+        });
+        return child;
+      },
+    });
+
+    const events = await collect(
+      runner.runTurn({ prompt: 'fail in stream', cwd: '/tmp/repo' }),
+    );
+
+    expect(events).toEqual([
+      {
+        kind: 'failed',
+        code: 'turn_failed',
+        message: 'model rejected request',
+      },
+    ]);
+  });
+
+  it('does not append aborted after a streamed completed terminal event', async () => {
+    const child = new FakeChild();
+    const controller = new AbortController();
+    const runner = createCodexRunner({
+      spawn() {
+        setImmediate(() => {
+          child.stdout.write('{"type":"turn.completed","usage":{}}\n');
+          controller.abort();
+          child.stdout.end();
+          child.stderr.end();
+          child.emit('exit', null, 'SIGTERM');
+        });
+        return child;
+      },
+    });
+
+    const events = await collect(
+      runner.runTurn({
+        prompt: 'complete before abort',
+        cwd: '/tmp/repo',
+        signal: controller.signal,
+      }),
+    );
+
+    expect(events.map((event) => event.kind)).toEqual(['usage', 'completed']);
+  });
+
   it('emits failed for spawn errors', async () => {
     const runner = createCodexRunner({
       spawn() {

@@ -34,6 +34,9 @@ the same behavior.
 - Isolate caller `onEvent` callback failures from the runner lifecycle.
 - Return or preserve the Codex session id reliably for continuous conversation
   flows.
+- Keep terminal event semantics single-source: if the Codex JSONL stream already
+  emitted `completed` or `failed`, later process exit state must not append a
+  second terminal event.
 - Keep authentication external through `codexHome`.
 
 ## Non-Goals
@@ -152,6 +155,8 @@ direct type imports without changing the default `CodexRunnerEvent` stream.
 - Unit tests cover resume session id emission, duplicate session id suppression,
   terminal event session id fallback, and compatible `thread.started` id field
   names.
+- Unit tests cover stream terminal events winning over later process exit or
+  abort state.
 - Fixture tests replay real Codex JSONL without spawning Codex.
 - No secrets are logged.
 - The package can be used without AgentWeb.
