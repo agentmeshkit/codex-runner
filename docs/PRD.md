@@ -18,6 +18,8 @@ the same behavior.
 - Backend services that run Codex as an agent subprocess.
 - Desktop or LAN apps that need resumable coding-agent sessions.
 - Test harnesses that need deterministic runner fixtures.
+- AI coding agents that need a short integration brief without loading the full
+  README or source tree into context.
 
 ## Goals
 
@@ -38,6 +40,8 @@ the same behavior.
   emitted `completed` or `failed`, later process exit state must not append a
   second terminal event.
 - Keep authentication external through `codexHome`.
+- Keep caller-facing docs aligned with the stable API, including a compact
+  AI-agent-specific integration guide.
 
 ## Non-Goals
 
@@ -65,6 +69,14 @@ the same behavior.
 - `codexSessionId` on terminal events when known; `resumeTurn()` emits a
   synthetic `codex_session` event from the requested resume id before waiting
   for CLI stdout.
+- Typed options for explicit Codex CLI automation flags, including `sandbox`,
+  `approvalMode`, `skipGitRepoCheck`, `ephemeral`, `ignoreUserConfig`,
+  `ignoreRules`, `profile`, `config`, `images`, `addDirs`,
+  `outputLastMessagePath`, `outputSchemaPath`,
+  `dangerouslyBypassApprovalsAndSandbox`, and `extraArgs`.
+- README that explains integration end to end for human maintainers.
+- Minimal `docs/AI_AGENT_INTEGRATION.md` that gives AI agents only the context
+  needed to call the package safely.
 
 ## Public API Sketch
 
@@ -76,6 +88,7 @@ for await (const event of runner.runTurn({
   cwd: '/repo',
   codexHome: '/accounts/default',
   model: 'gpt-5.4',
+  sandbox: 'read-only',
 })) {
   send(event);
 }
@@ -89,6 +102,8 @@ for await (const event of runner.resumeTurn({
   prompt: 'Continue',
   cwd: '/repo',
   codexHome: '/accounts/default',
+  sandbox: 'workspace-write',
+  approvalMode: 'on-request',
 })) {
   send(event);
 }
@@ -148,6 +163,15 @@ locally instead of depending on a published `@agentmeshkit/protocol` package.
 Once protocol is published with the required contract, the adapter can switch to
 direct type imports without changing the default `CodexRunnerEvent` stream.
 
+Documentation artifacts:
+
+- `README.md`: full caller-facing integration and operations guide.
+- `docs/AI_AGENT_INTEGRATION.md`: compact integration context designed for AI
+  agents; it must avoid background material and keep focus on required imports,
+  explicit permissions, first/resume turn calls, event handling, failure codes,
+  and operational notes.
+- `docs/PRD.md`: product intent, scope, and acceptance criteria.
+
 ## Acceptance Criteria
 
 - Unit tests cover first turn, resume, command execution, text deltas, failed
@@ -165,10 +189,17 @@ direct type imports without changing the default `CodexRunnerEvent` stream.
 - No secrets are logged.
 - The package can be used without AgentWeb.
 - Default test suite does not require a logged-in Codex CLI.
+- README documents default-conservative permissions and explicit high-permission
+  opt-in.
+- `docs/AI_AGENT_INTEGRATION.md` exists and stays short enough to include as
+  agent context without loading the full README.
+- PRD, README, and AI integration guide agree on command shape, resume mismatch
+  behavior, failure codes, and permission defaults.
 
 ## Milestones
 
 1. Extract event parser fixtures from AgentWeb.
 2. Implement runner API around child process.
 3. Add cancellation and timeout tests.
-4. Publish `0.1.0`.
+4. Add full human README and compact AI agent integration guide.
+5. Publish `0.1.0`.
