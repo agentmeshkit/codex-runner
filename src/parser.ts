@@ -345,12 +345,14 @@ export class CodexJsonlParser {
     );
 
     if (final && (item.output !== undefined || item.result !== undefined || item.error !== undefined)) {
+      const result = item.result ?? item.output;
+      const error = extractErrorMessage(item.error) ?? extractUnsupportedToolOutput(result);
       const resultEvent = this.toolResultOnce({
         kind: 'tool_result',
         toolCallId,
-        ok: !item.error,
-        result: redactValue(item.result ?? item.output),
-        error: extractErrorMessage(item.error),
+        ok: !error,
+        result: redactValue(result),
+        error,
         raw: redactValue(item),
       });
       if (resultEvent) events.push(resultEvent);
@@ -361,12 +363,13 @@ export class CodexJsonlParser {
 
   private genericToolResult(item: RawRecord): CodexRunnerEvent[] {
     const toolCallId = stringValue(item.call_id) ?? this.itemIdFor(item, undefined, 'tool-result');
-    const error = extractErrorMessage(item.error);
+    const result = item.output ?? item.result ?? item.content;
+    const error = extractErrorMessage(item.error) ?? extractUnsupportedToolOutput(result);
     const event = this.toolResultOnce({
       kind: 'tool_result',
       toolCallId,
       ok: !error,
-      result: redactValue(item.output ?? item.result ?? item.content),
+      result: redactValue(result),
       error,
       raw: redactValue(item),
     });
@@ -468,6 +471,19 @@ function extractText(item: RawRecord): string {
       .join('');
   }
   return '';
+}
+
+function extractUnsupportedToolOutput(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (!text) return undefined;
+  if (
+    /^unsupported (?:custom )?tool call:/i.test(text) ||
+    /^unsupported call:/i.test(text)
+  ) {
+    return redactString(text);
+  }
+  return undefined;
 }
 
 function extractErrorMessage(value: unknown): string | undefined {

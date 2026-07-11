@@ -364,4 +364,46 @@ describe('parseCodexJsonl', () => {
     expect(events.filter((event) => event.kind === 'tool_call')).toHaveLength(3);
     expect(events.filter((event) => event.kind === 'tool_result')).toHaveLength(1);
   });
+
+  it('marks unsupported Codex tool outputs as failed tool results', () => {
+    const events = parseCodexJsonl(
+      [
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'call-1',
+            type: 'function_call_output',
+            call_id: 'call-1',
+            output: 'unsupported call: exec_commandexec_command',
+          },
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'call-2',
+            type: 'tool_call',
+            name: 'apply_patch',
+            output: 'unsupported custom tool call: apply_patchapply_patch',
+          },
+        }),
+      ].join('\n'),
+    );
+
+    expect(events).toContainEqual({
+      kind: 'tool_result',
+      toolCallId: 'call-1',
+      ok: false,
+      result: 'unsupported call: exec_commandexec_command',
+      error: 'unsupported call: exec_commandexec_command',
+      raw: expect.objectContaining({ type: 'function_call_output' }),
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: 'tool_result',
+        toolCallId: 'call-2',
+        ok: false,
+        error: 'unsupported custom tool call: apply_patchapply_patch',
+      }),
+    );
+  });
 });
